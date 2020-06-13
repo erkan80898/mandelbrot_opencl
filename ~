@@ -1,3 +1,4 @@
+use num_complex::Complex;
 use image::{RgbaImage,Rgba};
 use palette::rgb::{LinSrgb};
 use palette::gradient::Gradient;
@@ -5,12 +6,12 @@ use ggez::{Context, ContextBuilder,GameResult};
 use ggez::conf;
 use ggez::event::{self, EventHandler};
 use ggez::graphics;
-use ggez::graphics::{Canvas,Color,Drawable,Image,DrawParam};
+use ggez::graphics::{Canvas,Color,Drawable,Image};
 use ggez::input::mouse::MouseButton;
 use ocl::{ProQue,Kernel,Buffer};
 use std::thread;
 use std::sync::Arc;
-const MAX_ITER:u32 = 1000;
+const MAX_ITER:u32 = 256;
 
 const R_MIN:f32 = -2.25f32;
 const R_MAX:f32 = 0.75f32;
@@ -67,55 +68,45 @@ impl Interface_Opencl{
             .arg(&buffer)
             .arg(dims.0)
             .arg(dims.1)
-            .arg(MAX_ITER)
+            .arg(256u32)
             .build().unwrap();
 
         Self{proque:pro_que,kernel:kern,
             result:vec![0u32;buffer.len()],read_buffer:buffer}
     }
 
-    fn work(&mut self){
+    fn work(&mut self)->&Vec<u32>{
         unsafe { self.kernel.enq().unwrap(); }
         self.read_buffer.read(&mut self.result).enq().unwrap();
-    }
-
-    fn read(&self)->&Vec<u32>{
+        println!("{:?}",self.result.iter().filter(|&&x|x>24).collect::<Vec<&u32>>());
         &self.result
     }
 }
 
 struct App{
-    worker:Interface_Opencl,
-    dim:(u32,u32),
-    grad:Gradient<LinSrgb>,
+    canvas:Canvas,
+    image:Image,
 }
 
 impl App{
 
-    fn new(ctx: &mut Context,dim:(u32,u32))->Self{
-        let mut worker = Interface_Opencl::new(dim);
-        worker.work();
-        Self{worker,dim,grad:build_grad()}
+    fn new(ctx: &mut Context,dim: u16,buffer:RgbaImage)->Self{
+        Self{canvas:
+            Canvas::new(ctx,dim,dim,conf::NumSamples::Eight).unwrap(),
+            image:Image::from_rgba8(ctx,dim,dim,&buffer.into_vec()).unwrap(),
+        }
     }
 }
 
 impl EventHandler for App{
 
-    fn update(&mut self, ctx: &mut Context) -> GameResult{ 
+    fn update(&mut self, ctx: &mut Context) -> GameResult{
+    
         Ok(())
     }
     fn draw(&mut self, ctx: &mut Context) -> GameResult{
         graphics::clear(ctx,graphics::WHITE);
-        let iters = self.worker.read();
-        let height = self.dim.0;
-        let width = self.dim.1;
-        let mut image = RgbaImage::new(height,width);
-        for (x,y,pixel) in image.enumerate_pixels_mut(){
-            color(iters[(y*width + x)as usize],pixel,&self.grad);
-        }
-        
-        Image::from_rgba8(ctx,height as u16,width as u16,&image.into_vec()).unwrap()
-            .draw(ctx,DrawParam::new());
+        self.image.draw(ctx,graphics::DrawParam::new());
         graphics::present(ctx);
         Ok(())
     }
@@ -147,10 +138,9 @@ fn color(iter:u32,buffer:&mut Rgba<u8>,grad:&Gradient<LinSrgb>){
             buffer[1] = 0;
             buffer[2] = 0;
             buffer[3] = 255;
-            print!("X");
         }else{
-            let x = (iter as f32/MAX_ITER as f32 * 4.0 + 1.0).log2();
-            let x = x/(4.0+1.0 as f32).log2();
+            let x = (iter as f32/MAX_ITER as f32 * 32.0 + 1.0).log2();
+            let x = x/(32.0+1.0 as f32).log2();
             let color = grad.get(x).into_components();
             buffer[0] = color.0 as u8;
             buffer[1] = color.1 as u8;
@@ -159,14 +149,53 @@ fn color(iter:u32,buffer:&mut Rgba<u8>,grad:&Gradient<LinSrgb>){
         }
 }
 
+fn generate_mendel_serial(dim:u32) -> RgbaImage{
+    // Define img size, range of reals and i, and scale, iter range
+    // It's found for 800x800, 256 iterations suffices
+    let img_dim = dim;
+    let r_min = -2.25f32;
+    let r_max = 0.75f32;
+    let c_min = -1.5f32;
+    let c_max = 1.5f32;
+    let iter_limit = MAX_ITER;
+
+    let r_scale = (r_max - r_min) / img_dim as f32;
+    let c_scale = (c_max - c_min) / img_dim as f32;
+
+    let mut pixel_buffer = RgbaImage::new(img_dim,img_dim);
+    let grad = build_grad();
+
+    for (x,y,pixel) in pixel_buffer.enumerate_pixels_mut(){
+        let r = x as f32 * r_scale + r_min;
+        let c = y as f32 * c_scale + c_min;
+
+        let c = Complex::new(r,c);
+
+        let mut result = c;
+        let mut iter = 0;
+        while iter < iter_limit{
+            result = result*result + c;
+            if result.norm() > 2.0{
+                break;
+            }
+            iter += 1;
+        }
+        color(c,iter,pixel,&grad);
+    }
+    return pixel_buffer;
+}
+
 fn main() {
     
+    let mut data = RgbaImage::new(800,800);
+    data = generate_mendel_serial(800);
+
     let (mut ctx, mut event_loop) =
        ContextBuilder::new("Mandelbrot Set", "Erkan")
            .window_mode(conf::WindowMode{width:800.0,height:800.0,
                maximized:false,resizable:false,..Default::default()})
            .build()
            .unwrap();
-    let mut app = App::new(&mut ctx,(800,800));
+    let mut app = App::new(&mut ctx,800,data);
     event::run(&mut ctx,&mut event_loop,&mut app);
 }
