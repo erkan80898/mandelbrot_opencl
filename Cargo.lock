@@ -1215,6 +1215,7 @@ dependencies = [
  "num-complex 0.2.4",
  "ocl",
  "palette",
+ "rayon",
 ]
 
 [[package]]
