@@ -1,3 +1,4 @@
+use clap::Clap;
 use ggez::conf;
 use ggez::event::{self, EventHandler};
 use ggez::graphics;
@@ -5,8 +6,8 @@ use ggez::graphics::{DrawParam, Drawable, Image};
 use ggez::input::mouse;
 use ggez::{Context, ContextBuilder, GameResult};
 use ocl::{Buffer, Context as ContextOCL, Device, Kernel, MemFlags, Platform, Program, Queue};
-const MAX_ITER: u32 = 12000;
-const SCALE: f64 = 0.1;
+
+const SCALE: f64 = 0.75;
 
 static KERNEL_SRC: &'static str = r#"
     __kernel void mandelbrot(__global unsigned char colors[][4], double r_from,double r_to,
@@ -32,7 +33,6 @@ static KERNEL_SRC: &'static str = r#"
 
     int px = get_global_id(0);
     int py = get_global_id(1);
-    if (px >= width || py >= height) return;
 
     double x0 = r_from + px * (r_to - r_from) / width;
     double y0 = c_from + py * (c_to - c_from) / height;
@@ -42,7 +42,7 @@ static KERNEL_SRC: &'static str = r#"
     double y = 0.0f;
 
     for (iteration = 0; iteration < iter_limit; iteration++) {
-        float xn = x * x - y * y + x0;
+        double xn = x * x - y * y + x0;
         y = 2 * x * y + y0;
         x = xn;
         if (x * x + y * y > 2.0f) {
@@ -66,14 +66,14 @@ static KERNEL_SRC: &'static str = r#"
     }
 "#;
 
-struct Interface_Opencl {
+struct OpenCL {
     kernel: Kernel,
     buffer_colors: Buffer<u8>,
     result: Vec<u8>,
 }
 
-impl Interface_Opencl {
-    fn new(dims: (u32, u32)) -> Self {
+impl OpenCL{
+    fn new(dims: (u32, u32),max_iter:u32) -> Self {
         let dev = Device::first(Platform::first().unwrap()).unwrap();
         let context = ContextOCL::builder().build().unwrap();
         let que = Queue::new(&context, dev.clone(), None).unwrap();
@@ -103,7 +103,7 @@ impl Interface_Opencl {
             .arg(1.5f64)
             .arg(dims.0)
             .arg(dims.1)
-            .arg(MAX_ITER)
+            .arg(max_iter)
             .build()
             .unwrap();
 
@@ -127,14 +127,14 @@ impl Interface_Opencl {
 }
 
 struct App {
-    worker: Interface_Opencl,
+    worker: OpenCL,
     dim: (u32, u32),
     complex: (f64,f64,f64,f64)
 }
 
 impl App {
-    fn new(ctx: &mut Context, dim: (u32, u32)) -> Self {
-        let mut worker = Interface_Opencl::new(dim);
+    fn new(dim: (u32, u32),max_iter:u32) -> Self {
+        let mut worker = OpenCL::new(dim,max_iter);
         worker.work();
         Self {
             worker,
@@ -145,24 +145,25 @@ impl App {
 }
 
 impl EventHandler for App {
-    fn update(&mut self, ctx: &mut Context) -> GameResult {
+    fn update(&mut self, _ctx: &mut Context) -> GameResult {
         Ok(())
     }
-    fn draw(&mut self, ctx: &mut Context) -> GameResult {
+
+    fn draw(&mut self, ctx: &mut Context) -> GameResult{
         graphics::clear(ctx, graphics::WHITE);
         let colors = self.worker.read();
-        let height = self.dim.0;
-        let width = self.dim.1;
 
-        Image::from_rgba8(ctx, height as u16, width as u16, &colors).unwrap()
-            .draw(ctx, DrawParam::new());
-        graphics::present(ctx);
+        Image::from_rgba8(ctx, self.dim.0 as u16, self.dim.1 as u16, &colors).unwrap()
+            .draw(ctx, DrawParam::new())?;
+    
+        graphics::present(ctx)?;
 
         Ok(())
     }
 
-    fn mouse_wheel_event(&mut self, ctx: &mut Context, x: f32, y: f32) {
-        let mut kernel = &self.worker.kernel;
+    #[allow(unused_must_use)]
+    fn mouse_wheel_event(&mut self, ctx: &mut Context, _x: f32, _y: f32){
+        let kernel = &self.worker.kernel;
 
         let unit_r = (self.complex.1 - self.complex.0) / self.dim.0 as f64;
         let unit_c = (self.complex.3 - self.complex.2) / self.dim.1 as f64;
@@ -180,22 +181,32 @@ impl EventHandler for App {
         kernel.set_arg(3,self.complex.2);
         kernel.set_arg(4,self.complex.3);        
     
-        println!("{}",self.complex.0);
         self.worker.work();
     }
 }
 
+#[derive(Clap)]
+#[clap(version = "1.0", author = "Erkan U. <erkan808987@gmail.com>")]
+struct Opts{
+    height: u32,
+    width: u32,
+    iteration: u32,
+}
+
+#[allow(unused_must_use)]
 fn main() {
+    let opts: Opts = Opts::parse();
+
     let (mut ctx, mut event_loop) = ContextBuilder::new("Mandelbrot Set", "Erkan")
         .window_mode(conf::WindowMode {
-            width: 800.0,
-            height: 800.0,
+            width: opts.width as f32,
+            height: opts.height as f32,
             maximized: false,
             resizable: false,
             ..Default::default()
         })
         .build()
         .unwrap();
-    let mut app = App::new(&mut ctx, (800, 800));
+    let mut app = App::new((opts.width, opts.height),opts.iteration);
     event::run(&mut ctx, &mut event_loop, &mut app);
 }
