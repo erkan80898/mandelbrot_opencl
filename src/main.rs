@@ -14,8 +14,8 @@ static KERNEL_SRC: &'static str = r#"
                         double c_from, double c_to, int width, int height,int iter_limit) {
         
     const unsigned char palette[16][3]={
-        {66, 30, 15},
         {25,7,26},
+        {0,120,50},
         {9,1,47},
         {4,4,73},
         {0,7,100},
