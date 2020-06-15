@@ -1,26 +1,17 @@
 use ggez::conf;
 use ggez::event::{self, EventHandler};
 use ggez::graphics;
-use ggez::graphics::{Canvas, Color, DrawParam, Drawable, Image};
-use ggez::input::mouse::MouseButton;
+use ggez::graphics::{DrawParam, Drawable, Image};
+use ggez::input::mouse;
 use ggez::{Context, ContextBuilder, GameResult};
-use image::{Rgba};
-use ocl::{
-    Buffer, Context as ContextOCL, Device, Kernel, MemFlags, Platform, Program, Queue,
-};
-use palette::gradient::Gradient;
-use palette::rgb::LinSrgb;
-const MAX_ITER: u32 = 256;
+use ocl::{Buffer, Context as ContextOCL, Device, Kernel, MemFlags, Platform, Program, Queue};
+const MAX_ITER: u32 = 12000;
+const SCALE: f64 = 0.1;
 
 static KERNEL_SRC: &'static str = r#"
-    __kernel void mandelbrot(__global unsigned char colors[][4],
-                                    int width, int height,int iter_limit) {
-    
-    const float r_max = -2.25f;
-    const float r_min = 0.75f;
-    const float c_max = 1.5f;
-    const float c_min = -1.5f;
-    
+    __kernel void mandelbrot(__global unsigned char colors[][4], double r_from,double r_to,
+                        double c_from, double c_to, int width, int height,int iter_limit) {
+        
     const unsigned char palette[16][3]={
         {66, 30, 15},
         {25,7,26},
@@ -36,18 +27,19 @@ static KERNEL_SRC: &'static str = r#"
         {255,170,0},
         {204,128,0},
         {153,87,0},
-        {106,52,3}
+        {106,52,3},
     };
 
     int px = get_global_id(0);
     int py = get_global_id(1);
     if (px >= width || py >= height) return;
 
-    float x0 = r_min + px * ((r_max - r_min) / width);
-    float y0 = c_min + py * ((c_max - c_min) / height);
+    double x0 = r_from + px * (r_to - r_from) / width;
+    double y0 = c_from + py * (c_to - c_from) / height;
+
     unsigned int iteration;
-    float x = 0.0f;
-    float y = 0.0f;
+    double x = 0.0f;
+    double y = 0.0f;
 
     for (iteration = 0; iteration < iter_limit; iteration++) {
         float xn = x * x - y * y + x0;
@@ -105,6 +97,10 @@ impl Interface_Opencl {
             .queue(que.clone())
             .global_work_size(dims)
             .arg(&buffer_colors)
+            .arg(-2.25f64)
+            .arg(0.75f64)
+            .arg(-1.5f64)
+            .arg(1.5f64)
             .arg(dims.0)
             .arg(dims.1)
             .arg(MAX_ITER)
@@ -133,7 +129,7 @@ impl Interface_Opencl {
 struct App {
     worker: Interface_Opencl,
     dim: (u32, u32),
-    grad: Gradient<LinSrgb>,
+    complex: (f64,f64,f64,f64)
 }
 
 impl App {
@@ -143,7 +139,7 @@ impl App {
         Self {
             worker,
             dim,
-            grad: build_grad(),
+            complex:(-2.25,0.75,1.5,-1.5),
         }
     }
 }
@@ -164,40 +160,28 @@ impl EventHandler for App {
 
         Ok(())
     }
-}
 
-fn build_grad() -> Gradient<LinSrgb> {
-    let mut palette = Vec::new();
+    fn mouse_wheel_event(&mut self, ctx: &mut Context, x: f32, y: f32) {
+        let mut kernel = &self.worker.kernel;
 
-    palette.push(LinSrgb::new(9.0, 1.0, 47.0));
-    palette.push(LinSrgb::new(4.0, 4.0, 47.0));
-    palette.push(LinSrgb::new(0.0, 7.0, 100.0));
-    palette.push(LinSrgb::new(12.0, 44.0, 138.0));
-    palette.push(LinSrgb::new(24.0, 82.0, 177.0));
-    palette.push(LinSrgb::new(57.0, 125.0, 209.0));
-    palette.push(LinSrgb::new(134.0, 181.0, 229.0));
-    palette.push(LinSrgb::new(211.0, 236.0, 248.0));
-    palette.push(LinSrgb::new(241.0, 233.0, 191.0));
-    palette.push(LinSrgb::new(248.0, 201.0, 95.0));
-    palette.push(LinSrgb::new(255.0, 170.0, 0.0));
-    palette.push(LinSrgb::new(106.0, 52.0, 3.0));
-    Gradient::new(palette)
-}
+        let unit_r = (self.complex.1 - self.complex.0) / self.dim.0 as f64;
+        let unit_c = (self.complex.3 - self.complex.2) / self.dim.1 as f64;
 
-fn color(iter: u32, buffer: &mut Rgba<u8>, grad: &Gradient<LinSrgb>) {
-    if iter == MAX_ITER {
-        buffer[0] = 0;
-        buffer[1] = 0;
-        buffer[2] = 0;
-        buffer[3] = 255;
-    } else {
-        let x = (iter as f32 / MAX_ITER as f32 * 4.0 + 1.0).log2();
-        let x = x / (4.0 + 1.0 as f32).log2();
-        let color = grad.get(x).into_components();
-        buffer[0] = color.0 as u8;
-        buffer[1] = color.1 as u8;
-        buffer[2] = color.2 as u8;
-        buffer[3] = 255;
+        let plane_point = (self.complex.0 + unit_r* mouse::position(ctx).x as f64,
+                                        self.complex.2 + unit_c * mouse::position(ctx).y as f64);
+
+        self.complex.0 = plane_point.0 - self.dim.0 as f64 / 2.0 * unit_r * SCALE;
+        self.complex.1 = plane_point.0 + self.dim.0 as f64 / 2.0 * unit_r * SCALE;
+        self.complex.2 = plane_point.1 - self.dim.1 as f64 / 2.0 * unit_c * SCALE;
+        self.complex.3 = plane_point.1 + self.dim.1 as f64 / 2.0 * unit_c * SCALE;
+
+        kernel.set_arg(1,self.complex.0);
+        kernel.set_arg(2,self.complex.1);
+        kernel.set_arg(3,self.complex.2);
+        kernel.set_arg(4,self.complex.3);        
+    
+        println!("{}",self.complex.0);
+        self.worker.work();
     }
 }
 
