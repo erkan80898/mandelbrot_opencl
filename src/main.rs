@@ -7,7 +7,7 @@ use ggez::input::mouse;
 use ggez::{Context, ContextBuilder, GameResult};
 use ocl::{Buffer, Context as ContextOCL, Device, Kernel, MemFlags, Platform, Program, Queue};
 
-const SCALE: f64 = 0.75;
+const SCALE: f64 = 0.9;
 
 static KERNEL_SRC: &'static str = r#"
     __kernel void mandelbrot(__global unsigned char colors[][4], double r_from,double r_to,
@@ -57,7 +57,7 @@ static KERNEL_SRC: &'static str = r#"
         colors[idx][3] = 255;
     }else{
         x = iteration * 1.0 /iter_limit;
-        int z = round(sinpi(x/2) * 16);
+        int z = round(sinpi(x/2) * 15);
         colors[idx][0] = palette[z][0];
         colors[idx][1] = palette[z][1];
         colors[idx][2] = palette[z][2];
