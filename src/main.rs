@@ -188,8 +188,8 @@ impl EventHandler for App {
 #[derive(Clap)]
 #[clap(version = "1.0", author = "Erkan U. <erkan808987@gmail.com>")]
 struct Opts{
-    height: u32,
     width: u32,
+    height: u32,
     iteration: u32,
 }
 
